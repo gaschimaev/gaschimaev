@@ -1,79 +1,64 @@
 #include <DHT.h>
-#include <WiFi.h>
 #include <PubSubClient.h>
+#include <WiFi.h>
 
-// Konfigurasi DHT
-#define DHTPIN 25
-#define DHTTYPE DHT22
-DHT dht(DHTPIN, DHTTYPE);
+// Inisialisasi PIN dan MQTT
+#define DHT_PIN 8
+#define RED_LED_PIN 12
+#define YELLOW_LED_PIN 10
+#define GREEN_LED_PIN 5
+#define RELAY_PIN 7
+#define BUZZER_PIN 9
 
-// Pin LED dan Relay
-#define LED_MERAH 27
-#define LED_HIJAU 26
-#define LED_KUNING 12
-#define RELAY_PIN 15
-#define BUZZER 23
+#define DHT_TYPE DHT22
 
-// Konfigurasi WiFi dan MQTT
-const char* ssid = "Wokwi-GUEST";             // Ganti dengan nama WiFi Anda
-const char* password = "";                     // Ganti dengan password WiFi Anda
-const char* mqtt_server = "broker.hivemq.com"; // Ganti dengan alamat broker MQTT
+const char* ssid = "SSID_WIFI_ANDA";
+const char* password = "PASSWORD_WIFI_ANDA";
+const char* mqtt_server = "BROKER_MQTT_ANDA";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+DHT dht(DHT_PIN, DHT_TYPE);
 
-void setup() {
-  Serial.begin(115200);
-  dht.begin();
-
-  // Pengaturan WiFi
+// Fungsi untuk menghubungkan ke WiFi
+void setup_wifi() {
+  delay(10);
+  Serial.print("Menghubungkan ke WiFi: ");
+  Serial.println(ssid);
   WiFi.begin(ssid, password);
+
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWiFi connected");
-
-  // Pengaturan MQTT
-  client.setServer(mqtt_server, 1883);
-  client.setCallback(callback);
-
-  // Pengaturan pin
-  pinMode(LED_MERAH, OUTPUT);
-  pinMode(LED_HIJAU, OUTPUT);
-  pinMode(LED_KUNING, OUTPUT);
-  pinMode(RELAY_PIN, OUTPUT);
-  pinMode(BUZZER, OUTPUT);
+  Serial.println("\nWiFi Tersambung");
 }
 
+// Fungsi untuk menghubungkan ke MQTT
 void reconnect() {
   while (!client.connected()) {
-    if (client.connect("ArduinoClient")) {
-      Serial.println("Connected to MQTT");
-      client.subscribe("relay/control");  // Subscribe ke topik untuk kontrol relay
+    Serial.print("Menghubungkan ke MQTT...");
+    if (client.connect("Hidroponik_Client")) {
+      Serial.println("Tersambung");
     } else {
+      Serial.print("Gagal, rc=");
+      Serial.print(client.state());
       delay(5000);
     }
   }
 }
 
-// Fungsi untuk menerima pesan dari MQTT
-void callback(char* topic, byte* payload, unsigned int length) {
-  String message;
-  for (int i = 0; i < length; i++) {
-    message += (char)payload[i];
-  }
-
-  // Kontrol relay berdasarkan pesan yang diterima
-  if (String(topic) == "relay/control") {
-    if (message == "{\"relay\": \"ON\"}") {
-      digitalWrite(RELAY_PIN, HIGH);  // Nyalakan relay
-      Serial.println("Relay status: ON");
-    } else if (message == "{\"relay\": \"OFF\"}") {
-      digitalWrite(RELAY_PIN, LOW);   // Matikan relay
-      Serial.println("Relay status: OFF");
-    }
-  }
+void setup() {
+  pinMode(RED_LED_PIN, OUTPUT);
+  pinMode(YELLOW_LED_PIN, OUTPUT);
+  pinMode(GREEN_LED_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  
+  Serial.begin(115200);
+  dht.begin();
+  setup_wifi();
+  client.setServer(mqtt_server, 1883);
 }
 
 void loop() {
@@ -81,50 +66,46 @@ void loop() {
     reconnect();
   }
   client.loop();
-
-  // Baca suhu dan kelembapan dari sensor DHT
+  
+  // Membaca suhu dan kelembapan
   float suhu = dht.readTemperature();
   float kelembapan = dht.readHumidity();
-  String relayStatus = (digitalRead(RELAY_PIN) == HIGH) ? "ON" : "OFF";
-
-  if (!isnan(suhu) && !isnan(kelembapan)) {
-    Serial.print("Suhu: ");
-    Serial.print(suhu);
-    Serial.print(" *C, Kelembapan: ");
-    Serial.print(kelembapan);
-    Serial.print(" %, Relay: ");
-    Serial.println(relayStatus);
-
-    // Publikasikan data suhu, kelembapan, dan status relay ke satu topik MQTT
-    char message[100];
-    snprintf(message, 100, "{\"temperature\": %.2f, \"humidity\": %.2f, \"relay\": \"%s\"}", suhu, kelembapan, relayStatus.c_str());
-    client.publish("sensor/data", message);
-
-    // Logika untuk LED dan Buzzer berdasarkan suhu
-    if (suhu > 35) {
-      digitalWrite(LED_MERAH, HIGH);
-      digitalWrite(BUZZER, HIGH);
-      digitalWrite(LED_KUNING, LOW);
-      digitalWrite(LED_HIJAU, LOW);
-      if (digitalRead(RELAY_PIN) == LOW) {
-        digitalWrite(RELAY_PIN, HIGH); // Nyalakan relay
-      }
-    } else if (suhu >= 30 && suhu <= 35) {
-      digitalWrite(LED_KUNING, HIGH);
-      digitalWrite(LED_MERAH, LOW);
-      digitalWrite(BUZZER, LOW);
-      digitalWrite(LED_HIJAU, LOW);
-      digitalWrite(RELAY_PIN, LOW); // Matikan relay
-    } else {
-      digitalWrite(LED_HIJAU, HIGH);
-      digitalWrite(LED_MERAH, LOW);
-      digitalWrite(LED_KUNING, LOW);
-      digitalWrite(BUZZER, LOW);
-      digitalWrite(RELAY_PIN, LOW); // Matikan relay
-    }
-  } else {
-    Serial.println("Failed to read from DHT sensor!");
+  
+  // Validasi pembacaan
+  if (isnan(suhu) || isnan(kelembapan)) {
+    Serial.println("Gagal membaca sensor DHT!");
+    return;
   }
 
-  delay(5000); // Interval kirim data setiap 5 detik
+  // Logika kontrol suhu
+  if (suhu > 35) {
+    digitalWrite(RED_LED_PIN, HIGH);
+    digitalWrite(YELLOW_LED_PIN, LOW);
+    digitalWrite(GREEN_LED_PIN, LOW);
+    digitalWrite(BUZZER_PIN, HIGH);
+  } else if (suhu >= 30 && suhu <= 35) {
+    digitalWrite(RED_LED_PIN, LOW);
+    digitalWrite(YELLOW_LED_PIN, HIGH);
+    digitalWrite(GREEN_LED_PIN, LOW);
+    digitalWrite(BUZZER_PIN, LOW);
+  } else {
+    digitalWrite(RED_LED_PIN, LOW);
+    digitalWrite(YELLOW_LED_PIN, LOW);
+    digitalWrite(GREEN_LED_PIN, HIGH);
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+
+  // Menyalakan Pompa
+  digitalWrite(RELAY_PIN, HIGH); // Pompa ON
+
+  // Mengirim data ke MQTT
+  char suhu_str[8];
+  char kelembapan_str[8];
+  dtostrf(suhu, 6, 2, suhu_str);
+  dtostrf(kelembapan, 6, 2, kelembapan_str);
+
+  client.publish("hidroponik/suhu", suhu_str);
+  client.publish("hidroponik/kelembapan", kelembapan_str);
+  
+  delay(2000);
 }
